@@ -14,6 +14,6 @@ export const ENV = {
     process.env.GOOGLE_REDIRECT_URI ??
     `${process.env.SERVER_URL ?? "http://localhost:5000"}/api/auth/google/callback`,
   IMGBB_API_KEY: process.env.IMGBB_API_KEY ?? "",
+  CRON_SECRET: process.env.CRON_SECRET ?? "",
   NODE_ENV: process.env.NODE_ENV ?? "development",
 };
-

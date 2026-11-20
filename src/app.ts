@@ -1,12 +1,15 @@
-import express from "express";
+import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { ENV } from "./config/env";
 import apiRouter from "./routes";
 import { stripeWebhook } from "./controllers/booking.controller";
 import { errorHandler, notFoundHandler } from "./middlewares/error.middleware";
+import { connectDB } from "./config/db";
 
 export const app = express();
+
+app.set("trust proxy", 1);
 
 // Enable Cross-Origin Resource Sharing
 app.use(cors({ origin: ENV.CLIENT_URL, credentials: true }));
@@ -21,6 +24,16 @@ app.post(
 // Standard body parsers
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
+
+// Database connection middleware before routes
+app.use(async (_req: Request, _res: Response, next: NextFunction) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Health check endpoint
 app.get("/", (_req, res) => {
@@ -37,4 +50,3 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 export default app;
-

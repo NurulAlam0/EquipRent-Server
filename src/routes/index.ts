@@ -6,6 +6,7 @@ import { bookingsRouter } from "./booking.routes";
 import { reviewsRouter } from "./review.routes";
 import { favoritesRouter } from "./favorite.routes";
 import { ownerRouter } from "./owner.routes";
+import { cronRouter } from "./cron.routes";
 
 const apiRouter = Router();
 
@@ -16,6 +17,7 @@ apiRouter.use("/bookings", bookingsRouter);
 apiRouter.use("/reviews", reviewsRouter);
 apiRouter.use("/favorites", favoritesRouter);
 apiRouter.use("/owner", ownerRouter);
+apiRouter.use("/cron", cronRouter);
 
 export {
   apiRouter,
@@ -26,7 +28,7 @@ export {
   reviewsRouter,
   favoritesRouter,
   ownerRouter,
+  cronRouter,
 };
 
 export default apiRouter;
-
