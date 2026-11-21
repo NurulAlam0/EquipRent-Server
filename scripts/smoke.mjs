@@ -45,6 +45,11 @@ const email = `smoke.${Date.now()}@rentora.dev`;
 const password = "TestPass1";
 const profile = { name: "Smoke Tester", email, photo: "https://i.imgur.com/abc.png", password };
 
+function getSessionCookie(response) {
+  const match = /access_token=([^;,\\s]+)/.exec(response.setCookie ?? "");
+  return match ? `access_token=${match[1]}` : null;
+}
+
 console.log(`API: ${base}\n`);
 
 // Health
@@ -63,8 +68,9 @@ check("invalid photo rejected (400)", badPhoto.status === 400, `got ${badPhoto.s
 const reg = await call("/api/auth/register", { method: "POST", body: profile });
 check("register succeeds (201)", reg.status === 201, `got ${reg.status} ${JSON.stringify(reg.data)}`);
 check("new user gets customer role", reg.data?.user?.role === "customer", JSON.stringify(reg.data?.user));
-const token = reg.data?.token;
-check("JWT access token issued (3 segments)", typeof token === "string" && token.split(".").length === 3);
+const registerCookie = getSessionCookie(reg);
+check("registration sets an HttpOnly session cookie", Boolean(registerCookie) && /httponly/i.test(reg.setCookie ?? ""));
+
 
 const dup = await call("/api/auth/register", { method: "POST", body: profile });
 check("duplicate email rejected (409)", dup.status === 409, `got ${dup.status}`);
@@ -78,11 +84,11 @@ check("unknown email rejected (401)", ghost.status === 401, `got ${ghost.status}
 
 const login = await call("/api/auth/login", { method: "POST", body: { email, password, keepSignedIn: true } });
 check("login succeeds (200)", login.status === 200, `got ${login.status} ${JSON.stringify(login.data)}`);
-const loginToken = login.data?.token;
-check("login returns JWT", typeof loginToken === "string" && loginToken.split(".").length === 3);
+const loginCookie = getSessionCookie(login);
+check("login sets an HttpOnly session cookie", Boolean(loginCookie) && /httponly/i.test(login.setCookie ?? ""));
 
 // Token verification
-const me = await call("/api/auth/me", { token: loginToken });
+const me = await call("/api/auth/me", { cookie: loginCookie });
 check("/me returns the user", me.status === 200 && me.data?.user?.email === email, JSON.stringify(me.data));
 
 const meNo = await call("/api/auth/me");
@@ -91,7 +97,7 @@ check("/me without token rejected (401)", meNo.status === 401, `got ${meNo.statu
 const meBad = await call("/api/auth/me", { token: "not.a.real.jwt" });
 check("/me with forged token rejected (401)", meBad.status === 401, `got ${meBad.status}`);
 
-const verify = await call("/api/auth/verify", { token: loginToken });
+const verify = await call("/api/auth/verify", { cookie: loginCookie });
 check("/verify reports customer role", verify.status === 200 && verify.data?.role === "customer", JSON.stringify(verify.data));
 
 // Public server-side equipment search and filters
@@ -159,21 +165,21 @@ if (sampleEquipment) {
 }
 
 // Role-based middleware boundaries
-const renterFavorites = await call("/api/favorites", { token: loginToken });
+const renterFavorites = await call("/api/favorites", { cookie: loginCookie });
 check("renters can read their favorites", renterFavorites.status === 200, `got ${renterFavorites.status}`);
 
-const renterOwnerFeed = await call("/api/equipment/mine", { token: loginToken });
+const renterOwnerFeed = await call("/api/equipment/mine", { cookie: loginCookie });
 check("renters cannot access the owner equipment feed", renterOwnerFeed.status === 403, `got ${renterOwnerFeed.status}`);
 
-const renterAdminFeed = await call("/api/admin/users", { token: loginToken });
+const renterAdminFeed = await call("/api/admin/users", { cookie: loginCookie });
 check("renters cannot access admin endpoints", renterAdminFeed.status === 403, `got ${renterAdminFeed.status}`);
 
-const renterOwnerOverview = await call("/api/owner/overview", { token: loginToken });
+const renterOwnerOverview = await call("/api/owner/overview", { cookie: loginCookie });
 check("renters cannot access owner analytics", renterOwnerOverview.status === 403, `got ${renterOwnerOverview.status}`);
 
 const ownerUpgrade = await call("/api/auth/become-owner", {
   method: "POST",
-  token: loginToken,
+  cookie: loginCookie,
 });
 check(
   "customer can switch to owner role",
@@ -181,11 +187,11 @@ check(
   `got ${ownerUpgrade.status}`
 );
 
-const ownerToken = ownerUpgrade.data?.token;
-const ownerFeed = await call("/api/equipment/mine", { token: ownerToken });
+const ownerCookie = getSessionCookie(ownerUpgrade);
+const ownerFeed = await call("/api/equipment/mine", { cookie: ownerCookie });
 check("owners can access their equipment feed", ownerFeed.status === 200, `got ${ownerFeed.status}`);
 
-const ownerOverview = await call("/api/owner/overview", { token: ownerToken });
+const ownerOverview = await call("/api/owner/overview", { cookie: ownerCookie });
 check(
   "owners receive equipment, completed rental, and earnings analytics",
   ownerOverview.status === 200 &&
@@ -196,17 +202,16 @@ check(
   `got ${ownerOverview.status} ${JSON.stringify(ownerOverview.data)}`
 );
 
-const ownerFavorites = await call("/api/favorites", { token: ownerToken });
+const ownerFavorites = await call("/api/favorites", { cookie: ownerCookie });
 check("owners cannot access renter favorites", ownerFavorites.status === 403, `got ${ownerFavorites.status}`);
 
-const ownerAdminFeed = await call("/api/admin/users", { token: ownerToken });
+const ownerAdminFeed = await call("/api/admin/users", { cookie: ownerCookie });
 check("owners cannot access admin endpoints", ownerAdminFeed.status === 403, `got ${ownerAdminFeed.status}`);
 
 // Cookie auth (what the Next.js route guard relies on)
-const cookieToken = /access_token=([^;]+)/.exec(login.setCookie ?? "")?.[1];
-check("login sets httpOnly access_token cookie", Boolean(cookieToken));
-if (cookieToken) {
-  const meCookie = await call("/api/auth/me", { cookie: `access_token=${cookieToken}` });
+check("login sets access_token cookie with HttpOnly", Boolean(loginCookie) && /httponly/i.test(login.setCookie ?? ""));
+if (loginCookie) {
+  const meCookie = await call("/api/auth/me", { cookie: loginCookie });
   check("/me works with cookie auth", meCookie.status === 200 && meCookie.data?.user?.email === email, `got ${meCookie.status}`);
 }
 
