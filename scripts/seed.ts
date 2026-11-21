@@ -1,7 +1,12 @@
 /**
- * Seeds an owner account + 6 approved equipment items so the home page
- * has real MongoDB data to show. Idempotent — safe to re-run.
+ * Seeds owner + admin accounts, approved equipment items and customer
+ * reviews so the home page has real MongoDB data to show.
+ * Idempotent — safe to re-run.
  * Usage: npm run seed   (from server/)
+ *
+ * Demo accounts (change the passwords after seeding):
+ *   owner@rentora.com / OwnerPass123  (owner)
+ *   admin@rentora.com / AdminPass123  (admin)
  */
 import "dotenv/config";
 import mongoose from "mongoose";
@@ -33,6 +38,24 @@ async function main() {
     console.log(`Created owner ${ownerEmail}`);
   } else {
     console.log(`Owner ${ownerEmail} already exists`);
+  }
+
+  // 1b. Admin account (so the admin dashboard is reachable: without an
+  // admin, All Users / All Equipment / All Rentals can never be used,
+  // because no UI flow creates the first admin).
+  const adminEmail = "admin@rentora.com";
+  const admin = await User.findOne({ email: adminEmail });
+  if (!admin) {
+    await User.create({
+      name: "Admin User",
+      email: adminEmail,
+      photo: "/image/logo-mark.png",
+      password: await bcrypt.hash("AdminPass123", 10),
+      role: "admin",
+    });
+    console.log(`Created admin ${adminEmail}`);
+  } else {
+    console.log(`Admin ${adminEmail} already exists`);
   }
 
   // 2. Professional rental inventory for the public catalogue

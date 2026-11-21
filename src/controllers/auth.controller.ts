@@ -141,7 +141,14 @@ export async function login(req: Request, res: Response, next: NextFunction) {
 }
 
 export function logout(_req: Request, res: Response) {
-  res.clearCookie("access_token", { path: "/" });
+  // Clear with the same attributes used when the cookie was set, or the
+  // cross-site cookie survives in production (sameSite: "none" + secure).
+  res.clearCookie("access_token", {
+    path: "/",
+    httpOnly: true,
+    secure: ENV.NODE_ENV === "production",
+    sameSite: ENV.NODE_ENV === "production" ? "none" : "lax",
+  });
   return res.json({ message: "Logged out successfully." });
 }
 
@@ -151,7 +158,18 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
     if (!user) {
       return res.status(404).json({ message: "User no longer exists." });
     }
-    return res.json({ user: publicUser(user) });
+    // Also return a fresh JWT: the Next.js client lives on a different
+    // origin, so it cannot read the server-domain `access_token` cookie.
+    // A Google sign-in lands with only that cookie; exchanging it here
+    // for a Bearer token is what lets the client call the API (and the
+    // route guard verify the session) after a reload.
+    const token = signToken({
+      sub: String(user._id),
+      email: user.email,
+      name: user.name,
+      role: user.role,
+    });
+    return res.json({ token, user: publicUser(user) });
   } catch (err) {
     return next(err);
   }
@@ -191,6 +209,35 @@ export async function updateMe(req: Request, res: Response, next: NextFunction) 
     await user.save();
 
     return res.json({ user: publicUser(user) });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+/**
+ * Lets a signed-in customer switch to the owner role (and back to the
+ * owner dashboard) without waiting for an admin to promote them. The
+ * project's own smoke test (`scripts/smoke.mjs`) expects this endpoint;
+ * it did not exist before, so the owner flow was unreachable from the UI.
+ * Admins cannot use it, and it returns a fresh JWT carrying the new role.
+ */
+export async function becomeOwner(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = await User.findById(req.user?.sub);
+    if (!user) {
+      return res.status(404).json({ message: "User no longer exists." });
+    }
+    if (user.role === "admin") {
+      return res.status(400).json({
+        message: "Admin accounts cannot switch to the owner role.",
+      });
+    }
+    if (user.role !== "owner") {
+      user.role = "owner";
+      await user.save();
+    }
+    const token = issueAuth(res, user, true);
+    return res.json({ token, user: publicUser(user) });
   } catch (err) {
     return next(err);
   }
@@ -290,4 +337,3 @@ export async function googleCallback(req: Request, res: Response) {
     return fail();
   }
 }
-
