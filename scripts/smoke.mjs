@@ -221,10 +221,17 @@ if (loginCookie) {
   check("/me works with cookie auth", meCookie.status === 200 && meCookie.data?.user?.email === email, `got ${meCookie.status}`);
 }
 
-// Google (no credentials yet → friendly redirect)
+// Google OAuth must either redirect to Google or report missing configuration.
 const google = await call("/api/auth/google");
-check("google redirects when unconfigured", google.status >= 300 && google.status < 400, `got ${google.status}`);
-check("google redirect flags config error", (google.location ?? "").includes("error=google-config"), google.location ?? "no location");
+const googleLocation = google.location ?? "";
+const googleRedirectIsValid =
+  googleLocation.startsWith("https://accounts.google.com/") ||
+  googleLocation.includes("/login?error=google-config");
+check(
+  "Google OAuth redirects to Google or shows a configuration error",
+  google.status >= 300 && google.status < 400 && googleRedirectIsValid,
+  `got ${google.status} ${googleLocation}`
+);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
