@@ -10,14 +10,14 @@ export interface OAuthTicketDoc {
 
 const oauthTicketSchema = new mongoose.Schema<OAuthTicketDoc>(
   {
-    ticketHash: { type: String, required: true, unique: true, index: true },
+    ticketHash: { type: String, required: true, unique: true },
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
       index: true,
     },
-    expiresAt: { type: Date, required: true, index: true },
+    expiresAt: { type: Date, required: true },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );
