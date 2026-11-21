@@ -97,6 +97,12 @@ check("/me without token rejected (401)", meNo.status === 401, `got ${meNo.statu
 const meBad = await call("/api/auth/me", { token: "not.a.real.jwt" });
 check("/me with forged token rejected (401)", meBad.status === 401, `got ${meBad.status}`);
 
+const badGoogleTicket = await call("/api/auth/exchange", {
+  method: "POST",
+  body: { ticket: "not-a-valid-google-ticket" },
+});
+check("invalid Google exchange ticket rejected (401)", badGoogleTicket.status === 401, `got ${badGoogleTicket.status}`);
+
 const verify = await call("/api/auth/verify", { cookie: loginCookie });
 check("/verify reports customer role", verify.status === 200 && verify.data?.role === "customer", JSON.stringify(verify.data));
 
