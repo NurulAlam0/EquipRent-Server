@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { publicUser, User, type UserDoc } from "../models/User";
 import { signToken } from "../utils/jwt";
 import { ENV } from "../config/env";
+import { OAuthTicket } from "../models/OAuthTicket";
 
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
 const PHOTO_RE = /^(https:\/\/|\/)/;
@@ -15,12 +16,14 @@ const isGoogleConfigured = Boolean(
     !ENV.GOOGLE_CLIENT_ID.includes("PASTE")
 );
 
-/** httpOnly cookie carrying the JWT so Next.js middleware can guard pages. */
+/** HttpOnly session cookie set by responses served through the frontend's
+ * same-origin /backend-api rewrite. The browser therefore stores it for the
+ * frontend host, where Next.js proxy and subsequent API calls can use it. */
 export function setAuthCookie(res: Response, token: string, maxAge?: number) {
   res.cookie("access_token", token, {
     httpOnly: true,
     secure: ENV.NODE_ENV === "production",
-    sameSite: ENV.NODE_ENV === "production" ? "none" : "lax",
+    sameSite: "lax",
     path: "/",
     ...(maxAge ? { maxAge } : {}),
   });
@@ -54,7 +57,7 @@ export async function register(req: Request, res: Response, next: NextFunction) 
     }
 
     const trimmedPhoto = String(photo ?? "").trim();
-    if (!PHOTO_RE.test(trimmedPhoto)) {
+    if (trimmedPhoto !== "" && !PHOTO_RE.test(trimmedPhoto)) {
       return res.status(400).json({
         message:
           "Photo must be a valid image URL starting with https:// (or /image/...).",
@@ -88,13 +91,13 @@ export async function register(req: Request, res: Response, next: NextFunction) 
     const user = await User.create({
       name: trimmedName,
       email: trimmedEmail,
-      photo: trimmedPhoto,
+      photo: trimmedPhoto || "/image/logo-mark.png",
       password: hash,
       role: "customer",
     });
 
-    const token = issueAuth(res, user, true);
-    return res.status(201).json({ token, user: publicUser(user) });
+    issueAuth(res, user, true);
+    return res.status(201).json({ user: publicUser(user) });
   } catch (err) {
     return next(err);
   }
@@ -133,21 +136,20 @@ export async function login(req: Request, res: Response, next: NextFunction) {
         .json({ message: "Incorrect password. Please try again." });
     }
 
-    const token = issueAuth(res, user, Boolean(keepSignedIn));
-    return res.json({ token, user: publicUser(user) });
+    issueAuth(res, user, Boolean(keepSignedIn));
+    return res.json({ user: publicUser(user) });
   } catch (err) {
     return next(err);
   }
 }
 
 export function logout(_req: Request, res: Response) {
-  // Clear with the same attributes used when the cookie was set, or the
-  // cross-site cookie survives in production (sameSite: "none" + secure).
+  // Clear with the exact path/security/SameSite attributes used when set.
   res.clearCookie("access_token", {
     path: "/",
     httpOnly: true,
     secure: ENV.NODE_ENV === "production",
-    sameSite: ENV.NODE_ENV === "production" ? "none" : "lax",
+    sameSite: "lax",
   });
   return res.json({ message: "Logged out successfully." });
 }
@@ -158,18 +160,7 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
     if (!user) {
       return res.status(404).json({ message: "User no longer exists." });
     }
-    // Also return a fresh JWT: the Next.js client lives on a different
-    // origin, so it cannot read the server-domain `access_token` cookie.
-    // A Google sign-in lands with only that cookie; exchanging it here
-    // for a Bearer token is what lets the client call the API (and the
-    // route guard verify the session) after a reload.
-    const token = signToken({
-      sub: String(user._id),
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    });
-    return res.json({ token, user: publicUser(user) });
+    return res.json({ user: publicUser(user) });
   } catch (err) {
     return next(err);
   }
@@ -236,8 +227,8 @@ export async function becomeOwner(req: Request, res: Response, next: NextFunctio
       user.role = "owner";
       await user.save();
     }
-    const token = issueAuth(res, user, true);
-    return res.json({ token, user: publicUser(user) });
+    issueAuth(res, user, true);
+    return res.json({ user: publicUser(user) });
   } catch (err) {
     return next(err);
   }
@@ -245,6 +236,45 @@ export async function becomeOwner(req: Request, res: Response, next: NextFunctio
 
 export function verify(req: Request, res: Response) {
   return res.json({ role: req.user?.role, email: req.user?.email });
+}
+
+
+/**
+ * Exchanges a short-lived, single-use Google OAuth ticket for a first-party
+ * access_token cookie. Only the SHA-256 digest is stored in MongoDB.
+ */
+export async function exchangeGoogleTicket(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const { ticket } = req.body ?? {};
+    if (typeof ticket !== "string" || ticket.length < 32 || ticket.length > 256) {
+      return res.status(401).json({ message: "Invalid or expired Google sign-in ticket." });
+    }
+
+    const ticketHash = crypto.createHash("sha256").update(ticket).digest("hex");
+    // findOneAndDelete makes the ticket single-use even under concurrent requests.
+    const consumed = await OAuthTicket.findOneAndDelete({
+      ticketHash,
+      expiresAt: { $gt: new Date() },
+    });
+
+    if (!consumed) {
+      return res.status(401).json({ message: "Invalid or expired Google sign-in ticket." });
+    }
+
+    const user = await User.findById(consumed.userId);
+    if (!user) {
+      return res.status(401).json({ message: "The Google account is no longer available." });
+    }
+
+    issueAuth(res, user, true);
+    return res.json({ user: publicUser(user) });
+  } catch (err) {
+    return next(err);
+  }
 }
 
 export function googleRedirect(_req: Request, res: Response) {
@@ -255,8 +285,9 @@ export function googleRedirect(_req: Request, res: Response) {
   const state = crypto.randomUUID();
   res.cookie("oauth_state", state, {
     httpOnly: true,
-    maxAge: 10 * 60 * 1000,
+    secure: ENV.NODE_ENV === "production",
     sameSite: "lax",
+    maxAge: 10 * 60 * 1000,
     path: "/",
   });
 
@@ -275,7 +306,12 @@ export async function googleCallback(req: Request, res: Response) {
   try {
     const { code, state } = req.query;
     const expectedState = req.cookies?.oauth_state;
-    res.clearCookie("oauth_state", { path: "/" });
+    res.clearCookie("oauth_state", {
+      httpOnly: true,
+      secure: ENV.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+    });
 
     if (!code || !state || !expectedState || state !== expectedState) {
       return fail();
@@ -308,8 +344,9 @@ export async function googleCallback(req: Request, res: Response) {
       email?: string;
       name?: string;
       picture?: string;
+      email_verified?: boolean;
     };
-    if (!info.email) return fail();
+    if (!info.email || info.email_verified !== true) return fail();
 
     const email = info.email.toLowerCase();
     let user = await User.findOne({ email });
@@ -324,14 +361,19 @@ export async function googleCallback(req: Request, res: Response) {
       });
     }
 
-    const token = signToken({
-      sub: String(user._id),
-      email: user.email,
-      name: user.name,
-      role: user.role,
+    // The callback runs on the backend origin. Do not set the browser's
+    // frontend session cookie here; return a short-lived one-time ticket and
+    // let the frontend exchange it through its same-origin /backend-api proxy.
+    const ticket = crypto.randomBytes(32).toString("base64url");
+    await OAuthTicket.create({
+      ticketHash: crypto.createHash("sha256").update(ticket).digest("hex"),
+      userId: user._id,
+      expiresAt: new Date(Date.now() + 60 * 1000),
     });
-    setAuthCookie(res, token, WEEK_MS);
-    return res.redirect(`${ENV.CLIENT_URL}/dashboard?auth=google`);
+
+    const redirectUrl = new URL("/login", ENV.CLIENT_URL);
+    redirectUrl.searchParams.set("exchange", ticket);
+    return res.redirect(redirectUrl.toString());
   } catch (err) {
     console.error("Google callback error:", err);
     return fail();
