@@ -16,7 +16,9 @@ const isGoogleConfigured = Boolean(
     !ENV.GOOGLE_CLIENT_ID.includes("PASTE")
 );
 
-/** httpOnly cookie carrying the JWT so Next.js middleware can guard pages. */
+/** HttpOnly session cookie set by responses served through the frontend's
+ * same-origin /backend-api rewrite. The browser therefore stores it for the
+ * frontend host, where Next.js proxy and subsequent API calls can use it. */
 export function setAuthCookie(res: Response, token: string, maxAge?: number) {
   res.cookie("access_token", token, {
     httpOnly: true,
@@ -142,8 +144,7 @@ export async function login(req: Request, res: Response, next: NextFunction) {
 }
 
 export function logout(_req: Request, res: Response) {
-  // Clear with the same attributes used when the cookie was set, or the
-  // cross-site cookie survives in production (sameSite: "none" + secure).
+  // Clear with the exact path/security/SameSite attributes used when set.
   res.clearCookie("access_token", {
     path: "/",
     httpOnly: true,
