@@ -46,7 +46,7 @@ const password = "TestPass1";
 const profile = { name: "Smoke Tester", email, photo: "https://i.imgur.com/abc.png", password };
 
 function getSessionCookie(response) {
-  const match = /access_token=([^;,\\s]+)/.exec(response.setCookie ?? "");
+  const match = /access_token=([^;,\s]+)/.exec(response.setCookie ?? "");
   return match ? `access_token=${match[1]}` : null;
 }
 
